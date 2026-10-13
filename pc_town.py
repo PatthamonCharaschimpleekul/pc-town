@@ -117,7 +117,131 @@ class Sampler(threading.Thread):
 
 SAMPLER = None
 STATE = {"last_ping": 0.0, "first_ping": False}
-INDEX_HTML = "PC Town loading"  # Task 3 แทนที่ด้วยหน้าเว็บจริง
+INDEX_HTML = r"""<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><title>PC Town</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#8ecfe8;font-family:'Segoe UI',monospace}
+#cv{display:block;width:100vw;height:100vh;image-rendering:pixelated}
+#tip{position:fixed;display:none;background:#fffbe7;border:3px solid #4a3220;border-radius:4px;
+     padding:6px 10px;font-size:13px;pointer-events:none;z-index:9;box-shadow:3px 3px 0 #4a322055}
+#offBtn{position:fixed;top:10px;right:10px;z-index:9;background:#ff8f8f;border:3px solid #4a3220;
+        border-radius:6px;font-size:14px;padding:4px 12px;cursor:pointer;font-weight:bold}
+#hud{position:fixed;left:0;right:0;bottom:0;display:flex;gap:14px;justify-content:center;
+     align-items:flex-end;padding:8px 12px;background:#4a3220d9;color:#fff;font-size:12px;z-index:8}
+.m{width:120px}.m b{display:block;font-size:11px;letter-spacing:.5px}
+.bar{height:12px;background:#00000055;border:2px solid #fff;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0%;background:#7ee081;transition:width .4s}
+.bar i.warn{background:#ffd35c}.bar i.hot{background:#ff7a5c}
+#small{position:fixed;right:12px;bottom:78px;color:#fff;font-size:11px;text-align:right;z-index:8;text-shadow:1px 1px 0 #0006}
+#dead{position:fixed;inset:0;display:none;place-items:center;font-size:22px;color:#4a3220;background:#8ecfe8}
+</style></head><body>
+<canvas id="cv"></canvas>
+<div id="tip"></div>
+<div id="hud"></div>
+<div id="small"></div>
+<button id="offBtn">ปิดแอป</button>
+<div id="dead">ปิดเรียบร้อย — ปิดแท็บนี้ได้เลยค่ะ 🏙️</div>
+<script>
+"use strict";
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const WORLD = {W: 960, H: 460};
+let scale = 1, offX = 0, offY = 0, dpr = 1;
+
+function resize(){
+  dpr = window.devicePixelRatio || 1;              // คมทุก Windows scale 125/150%
+  cv.width  = Math.round(innerWidth * dpr);
+  cv.height = Math.round(innerHeight * dpr);
+  scale = Math.min(cv.width / WORLD.W, cv.height / WORLD.H);
+  offX = (cv.width - WORLD.W * scale) / 2;
+  offY = (cv.height - WORLD.H * scale) / 2;
+  ctx.imageSmoothingEnabled = false;               // pixel art ไม่เบลอ
+}
+addEventListener('resize', resize);
+resize();
+
+function px(x, y, w, h, color){
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x), Math.round(y), w, h);
+}
+
+/* ---------- ฉากหลัง ---------- */
+const ROAD_Y = 300, ROAD_H = 70, LANE_Y = ROAD_Y + ROAD_H/2;
+const HOUSES = [70, 200, 330, 460, 590, 700];      // slot x (ซ้ายบนของบ้าน)
+const HOUSE_COLORS = ['#ffb3ba','#b5ead7','#c7ceea','#ffe5b4','#d4a5ff','#a0e7e3'];
+let clouds = [{x:100,y:60,s:1},{x:420,y:90,s:.7},{x:760,y:50,s:.9}];
+
+function drawSky(t){
+  px(0,0,WORLD.W,WORLD.H,'#bfe8f7');               // ฟ้าอ่อนสดใส
+  px(0,0,WORLD.W,180,'#cdeefb');
+  for(const c of clouds){
+    c.x += 0.08 * c.s;
+    if(c.x > WORLD.W + 60) c.x = -80;
+    ctx.fillStyle = '#ffffff';
+    for(const [ox,oy,w,h] of [[0,0,46,14],[10,-8,26,12],[34,-3,18,10]]){
+      ctx.fillRect(c.x+ox, c.y+oy, w*c.s+8, h*c.s);
+    }
+  }
+}
+function drawGround(){
+  px(0,240,WORLD.W,60,'#9ede8a');                  // สนามหญ้าหลังถนน
+  px(0,ROAD_Y,WORLD.W,ROAD_H,'#6b6b7b');           // ถนน
+  px(0,ROAD_Y,WORLD.W,4,'#8a8a9a');
+  px(0,ROAD_Y+ROAD_H-4,WORLD.W,4,'#55555f');
+  ctx.fillStyle = '#f4f1de';                        // เส้นประกลางถนน
+  for(let x=0;x<WORLD.W;x+=64) ctx.fillRect(x,LANE_Y-2,32,4);
+  px(0,ROAD_Y+ROAD_H,WORLD.W,WORLD.H,'#7ccb6f');    // หญ้าหน้าถนน
+}
+function drawHouse(x, color, label){
+  px(x,200,90,44,'#fffaf3');
+  px(x+4,204,82,36,color);                          // ผนังโทนพาสเทล
+  px(x-4,186,98,18,'#e46b6b'); px(x+6,176,78,12,'#e46b6b'); px(x+16,168,58,10,'#d95c5c'); // หลังคา
+  px(x+34,216,22,28,'#5d4635');                     // ประตู
+  px(x+12,212,14,14,'#bfe8f7'); px(x+64,212,14,14,'#bfe8f7'); // หน้าต่าง
+  if(label){
+    ctx.fillStyle='#4a3220'; ctx.font='10px monospace'; ctx.textAlign='center';
+    ctx.fillText(label, x+45, 258);
+  }
+}
+function drawFactory(){
+  px(830,170,110,74,'#9a93a8'); px(838,178,26,24,'#565163'); px(872,178,26,24,'#565163');
+  px(906,178,26,24,'#565163'); px(844,140,18,30,'#6e6780');   // ปล่อง
+  ctx.fillStyle='#4a3220'; ctx.font='10px monospace'; ctx.textAlign='center';
+  ctx.fillText('Factory', 885, 258);
+}
+function drawTree(x){
+  px(x+10,214,10,30,'#8a5a35');
+  ctx.fillStyle='#4fa855';
+  ctx.beginPath(); ctx.arc(x+15,204,20,0,7); ctx.fill();
+  ctx.fillStyle='#66c16b';
+  ctx.beginPath(); ctx.arc(x+9,196,12,0,7); ctx.arc(x+22,198,11,0,7); ctx.fill();
+}
+
+function drawScene(t){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle='#8ecfe8'; ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.setTransform(scale,0,0,scale,offX,offY);
+  drawSky(t);
+  drawGround();
+  HOUSES.forEach((x,i)=>drawHouse(x, HOUSE_COLORS[i], '')); // label = ชื่อ process (Task 4)
+  drawTree(160); drawTree(540); drawTree(780);
+  drawFactory();
+}
+
+let last = 0;
+function frame(ms){
+  const dt = Math.min(0.05, (ms - last)/1000); last = ms;
+  drawScene(ms/1000);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+document.getElementById('offBtn').onclick = async () => {
+  try{ await fetch('/api/shutdown',{method:'POST'}); }catch(e){}
+  document.querySelectorAll('body > *:not(#dead)').forEach(el=>el.style.display='none');
+  document.getElementById('dead').style.display='grid';
+};
+</script>
+</body></html>"""
 HTTP_PORT = HTTP_PORT_START
 
 
