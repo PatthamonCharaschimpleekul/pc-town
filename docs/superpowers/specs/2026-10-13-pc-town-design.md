@@ -29,13 +29,17 @@ D:\PC_Town\
 
 ใช้เฉพาะ standard library + `psutil` (เครื่องมี v7.2.2 แล้ว):
 
+- **Single-instance lock**: ก่อน start server ให้ลอง connect เข้า port lock (`127.0.0.1:8766`) — ถ้า connect ได้ = มี instance อยู่แล้ว → **ไม่ต้องรัน server/sampler ใหม่** แค่ `webbrowser.open(url)` ของเดิมแล้ว exit (แก้ปัญหา double-click ซ้ำหลายแท็บ/ Sampler ซ้อน) — instance แรก bind port 8766 เป็น lock marker ตลอดอายุ
 - **Sampler thread**: ลูปทุก 1 วินาที อ่านค่าจาก psutil แล้วเก็บใน dict กลาง (มี lock) — endpoint ไม่ต้อง block:
   - `psutil.cpu_percent()` → ภาพรวม CPU
   - `psutil.virtual_memory()` → RAM (%)
   - `psutil.disk_io_counters()` → คำนวณอัตรา read/write ต่อวินาที (delta) + `disk_usage(C:)` สำหรับ % เต็ม
   - `psutil.net_io_counters()` → คำนวณอัตรา send/recv ต่อวินาที (delta)
   - `psutil.sensors_battery()` → ระดับแบต + เสียบชาร์จอยู่ไหม (ถ้าเครื่องไม่มีแบต → `null`, ฝั่ง UI แสดง "AC" หรือซ่อน)
-  - `psutil.process_iter(['pid','name','cpu_percent','memory_info'])` → top **6** โปรเซสตาม CPU% (ตัด system process ที่ name ว่าง)
+  - `psutil.process_iter(['pid','name','cpu_percent','memory_info'])` → top **6** โปรเซสตาม CPU% พร้อม **ตัวกรอง user-process**:
+    - ตัดที่ name ว่าง/`System`/`Idle`/`Registry`/`svchost`/`csrss`/`wininit`/`services.exe`/`lsass`/`conhost`/`Memory Compression` และรายการที่เป็น kernel process (ppid=4 ยกเว้น names ที่รู้จัก)
+    - ตัดตัวเอง (`pythonw.exe` ที่รัน pc_town) ออก
+    - ถ้ากรองแล้วเหลือน้อยกว่า 6 → ใช้ตัวที่มี (ไม่ดัน system process กลับมา)
   - uptime (`psutil.boot_time()`), จำนวน process ทั้งหมด, อุณหภูมิ (`psutil.sensors_temperatures()` ถ้ามี — ไม่มีก็ไม่แสดง)
   - `cpu_percent()` ต่อ process ต้องมี round แรกเป็น bootstrap (ค่า 0) ก่อนเริ่มเก็บจริง
 - **HTTP server** (`http.server.ThreadingHTTPServer` บน 127.0.0.1 เท่านั้น):
@@ -52,6 +56,8 @@ D:\PC_Town\
 
 - **HTML5 Canvas + JavaScript ล้วน** (no libraries, no CDN — offline ได้ 100%)
 - `requestAnimationFrame` ~60fps สำหรับวาด; `fetch('/api/status')` ทุก 1s สำหรับข้อมูล
+- **HiDPI/Windows scaling (125%/150%)**: ตั้ง `canvas.width/height = CSS size × window.devicePixelRatio` แล้ว `ctx.scale(dpr, dpr)` + วาด pixel art บน offscreen canvas ย่อส่วนแบบ `imageSmoothingEnabled = false` → ขอบ pixel คมตลอด ไม่เบลอ
+- **Smooth animation (กันกระตุกเพราะข้อมูลมาทีละ 1 วิ)**: ค่าที่มาจาก API (CPU% → target speed, ตำแหน่งเป้าหมาย) จะถูก **lerp/exponential smoothing** ในฝั่ง JS ทุก frame — ตัวละครเปลี่ยนความเร็วค่อยๆ ใน ~0.5–1 s, ตำแหน่งเดินต่อเนื่องแบบ frame-based ไม่กระโดดเมื่อ data patch เข้ามา
 - โครง canvas 2 ชั้นแนวคิด: background (ตึก ถนน ต้นไม้ เมฆ — วาดครั้งเดียว/scroll ช้าๆ) + ตัวละคร + HUD
 
 ## การ map ข้อมูล → แอนิเมชัน (Core Design Decision)
@@ -96,6 +102,10 @@ D:\PC_Town\
 4. กดปุ่ม "ปิดแอป" ในหน้าเว็บ → server ปิดทันที
 5. เครื่องตั้งโต๊ะ (ไม่มีแบต) → HUD battery ไม่ crash
 6. Port 8765 ถูกจับอยู่ → ยังเปิดได้ (port +1)
+7. ดับเบิลคลิก shortcut ซ้ำ 2–3 ครั้งขณะเปิดอยู่ → มี server เดียว, แค่เปิดแท็บเพิ่ม (lock ที่ 8766)
+8. ตั้ง Windows display scale ที่ 125%/150% → pixel art ยังคม ไม่เบลอ
+9. ดูตัวละครตอน CPU process ค่อยๆ ลด → ความเร็วลดนุ่มนวล ไม่มีกระตุกก้าวเดิน (lerp ทำงาน)
+10. เปิด Task Manager เทียบ → ตัวละคร top 6 ตรงกับโปรเซสจริง (ไม่มี svchost/Idle แทรก)
 
 ## ขอบเขตที่ไม่ทำ (YAGNI)
 
