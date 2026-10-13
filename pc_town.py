@@ -10,7 +10,7 @@ LOCK_PORT = 8766
 HTTP_PORT_START = 8765
 OWN_PIDS = {os.getpid()}
 SYSTEM_DENYLIST = {
-    "", "system", "registry", "memory compression", "svchost.exe",
+    "", "system", "idle", "system idle process", "registry", "memory compression", "svchost.exe",
     "csrss.exe", "wininit.exe", "services.exe", "lsass.exe",
     "conhost.exe", "winlogon.exe", "dwm.exe", "taskhostw.exe",
     "ntoskrnl.exe", "smss.exe", "fontdrvhost.exe", "audiodg.exe",
@@ -227,10 +227,161 @@ function drawScene(t){
   drawFactory();
 }
 
+/* ---------- sprites (pixel array: h=hair s=skin e=eye b=shirt p=pants f=foot) ---------- */
+const U = 4; // 1 pixel unit = 4 world px
+const FRAMES = {
+  stand: [
+    "..hhhh..", ".hhhhhh.", ".hssssh.", ".sesese.", ".ssssss.",
+    "..bbbb..", "..bbbb..", "..bbbb..",
+    "..pppp..", "..p..p..", "..f..f..",
+  ],
+  walkA: [
+    "..hhhh..", ".hhhhhh.", ".hssssh.", ".sesese.", ".ssssss.",
+    "..bbbb..", ".bbbbbb.", "..bbbb..",
+    "..ppp...", ".p...p..", "f.....f.",
+  ],
+  walkB: [
+    "..hhhh..", ".hhhhhh.", ".hssssh.", ".sesese.", ".ssssss.",
+    "..bbbb..", ".bbbbbb.", "..bbbb..",
+    "...ppp..", "..p...p.", ".f.....f",
+  ],
+  run: [
+    ".hhhhh..", "shhhhh.s", "ssssssss", ".esese..", ".ssss...",
+    "..bbbb..", ".bbbbbb.", "bbbbbb..",
+    "..pppp..", "p......p", "ff....ff",
+  ],
+};
+const SHIRTS = ['#ff8f8f','#8fd0ff','#b3e88f','#ffd98f','#d0a3ff','#8ffff2'];
+const HAIRS  = ['#5d4635','#8a5a35','#3b2a1a','#c96f3b','#4a6fa5','#7a4a8a'];
+function drawSprite(frameName, x, y, i, dir){
+  const rows = FRAMES[frameName];
+  const pal = {h:HAIRS[i], s:'#ffdcc3', e:'#3b2a1a', b:SHIRTS[i], p:'#4a5568', f:'#3b2a1a'};
+  for(let r=0;r<rows.length;r++)
+    for(let c=0;c<8;c++){
+      const ch = rows[r][c];
+      if(ch==='.'||ch===' ') continue;
+      const cx = dir>0 ? c : 7-c;
+      px(x + cx*U, y + r*U, U, U, pal[ch]);
+    }
+}
+
+/* ---------- characters ---------- */
+const SLOT_HOME = HOUSES.map(x => x + 45);  // หน้าบ้านแต่ละหลัง
+class Char {
+  constructor(slot){
+    this.slot = slot;
+    this.x = SLOT_HOME[slot]; this.target = this.x;
+    this.speed = 0; this.targetSpeed = 0;
+    this.dir = 1; this.frameT = 0; this.idle = false; this.zT = 0;
+    this.name = ''; this.pendingName = ''; this.nameAlpha = 0;
+    this.cpu = 0; this.memMB = 0; this.size = 1;
+  }
+  setProc(p){
+    const name = p ? p.name : '';
+    if(name !== this.pendingName && name !== this.name){
+      if(this.name && name) this.pendingName = name;     // ค่อยๆ fade
+      else { this.name = name; this.pendingName = ''; this.nameAlpha = 1; }
+    }
+    if(!this.name && name){ this.name = name; this.nameAlpha = 1; }
+    this.cpu = p ? p.cpu : 0;
+    this.memMB = p ? p.memMB : 0;
+    this.size = this.memMB > 800 ? 1.3 : this.memMB > 300 ? 1.15 : 1;  // RAM เยอะ→ใหญ่ขึ้น
+    const c = this.cpu;
+    this.idle = c < 1;
+    this.targetSpeed = c > 20 ? 150 : c > 5 ? 70 : c > 1 ? 30 : 0;     // world px/s
+    if(this.idle) this.target = this.x;
+  }
+  update(dt){
+    this.speed += (this.targetSpeed - this.speed) * Math.min(1, dt * 2.5); // exponential smoothing
+    if(!this.idle && this.x === this.target && this.speed < 1)
+      this.pickTarget();
+    if(!this.idle && this.speed > 1){
+      const d = this.target - this.x;
+      this.dir = d >= 0 ? 1 : -1;
+      const step = Math.min(Math.abs(d), this.speed * dt);
+      this.x += Math.sign(d) * step;
+      if(Math.abs(this.target - this.x) < 0.5) this.x = this.target;
+    }
+    this.frameT += dt * (this.speed / 40 + 0.5);
+    if(this.pendingName){
+      this.nameAlpha -= dt * 2;
+      if(this.nameAlpha <= 0){ this.name = this.pendingName; this.pendingName = ''; this.nameAlpha = 0; }
+    } else if(this.name && this.nameAlpha < 1) this.nameAlpha = Math.min(1, this.nameAlpha + dt * 2);
+    if(this.idle){ this.zT += dt; } else this.zT = 0;
+  }
+  pickTarget(){
+    const home = SLOT_HOME[this.slot];
+    if(Math.random() < 0.35){ // กลับบ้าน
+      this.target = home;
+    } else {
+      this.target = Math.max(20, Math.min(WORLD.W - 30,
+                    home + (Math.random() * 260 - 130)));
+    }
+  }
+  draw(t){
+    const feetY = ROAD_Y + 58;
+    let frameName = 'stand';
+    if(this.speed > 110) frameName = 'run';
+    else if(this.speed > 2) frameName = (Math.floor(this.frameT * 2) % 2) ? 'walkA' : 'walkB';
+    ctx.save();
+    if(this.size > 1){ const cx = this.x; ctx.translate(cx, feetY); ctx.scale(this.size, this.size); ctx.translate(-cx, -feetY); }
+    drawSprite(frameName, this.x - 16, feetY - FRAMES.stand.length * U, this.slot, this.dir);
+    ctx.restore();
+    if(this.idle && this.zT % 2.4 < 1.2){                    // ฟอง z ตอนหลับ
+      ctx.fillStyle = '#ffffffcc'; ctx.font = '12px monospace'; ctx.textAlign = 'left';
+      ctx.fillText('z', this.x + 20, feetY - 52 - (this.zT % 1.2) * 8);
+    }
+    if(this.name){
+      ctx.globalAlpha = Math.max(0, Math.min(1, this.nameAlpha));
+      ctx.fillStyle = '#4a3220'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+      const label = this.name.replace(/\.exe$/i, '').slice(0, 14);
+      ctx.fillText(label, this.x, feetY + 16);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+const chars = SLOT_HOME.map((_, i) => new Char(i));
+
+/* ---------- polling ---------- */
+let DATA = {procs: []};
+async function poll(){
+  try{
+    const r = await fetch('/api/status'); DATA = await r.json();
+    fetch('/api/ping').catch(()=>{});
+  }catch(e){}
+  setTimeout(poll, 1000);
+}
+poll();
+
+function applyData(){
+  (DATA.procs || []).forEach((p, i) => chars[i] && chars[i].setProc(p));
+  for(let i = (DATA.procs||[]).length; i < chars.length; i++) chars[i].setProc(null);
+}
+
+/* ---------- tooltip (hover) ---------- */
+const tip = document.getElementById('tip');
+addEventListener('mousemove', e => {
+  const wx = (e.clientX * dpr - offX) / scale, wy = (e.clientY * dpr - offY) / scale;
+  const hit = chars.find(c => c.name && Math.abs(wx - c.x) < 22*c.size && wy > ROAD_Y + 8 && wy < ROAD_Y + 80);
+  if(hit){
+    tip.style.display = 'block';
+    tip.style.left = (e.clientX + 14) + 'px';
+    tip.style.top  = (e.clientY - 10) + 'px';
+    tip.innerHTML = `<b>${hit.name}</b><br>CPU ${hit.cpu}% · RAM ${hit.memMB} MB`;
+  } else tip.style.display = 'none';
+});
+
+/* Task 5 จะแทนที่ stub สองฟังก์ชันนี้ */
+function updateEnv(dt){}
+function drawHud(){}
+
 let last = 0;
 function frame(ms){
   const dt = Math.min(0.05, (ms - last)/1000); last = ms;
   drawScene(ms/1000);
+  applyData();
+  for(const c of chars){ c.update(dt); c.draw(ms/1000); }
+  updateEnv(dt); drawHud();   // Task 5
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

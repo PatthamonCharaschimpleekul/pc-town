@@ -6,6 +6,11 @@ def test_excludes_named_system_processes():
         assert not should_include(n, 100, 8), n
 
 
+def test_excludes_system_idle_process():
+    # บน Windows ชื่อจริงคือ "System Idle Process" pid=0 ppid=0 — ต้องถูกกรอง
+    assert not should_include("System Idle Process", 0, 0)
+
+
 def test_excludes_kernel_children():
     # ppid == 4 = children of System (Registry, Memory Compression, ...)
     assert not should_include("weirdkernelthing.exe", 101, 4)
