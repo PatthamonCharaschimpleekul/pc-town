@@ -216,8 +216,8 @@ const HEADS = {
 };
 const TORSO = { stand:["..bbbb..","..bbbb..","..bbbb.."], a:["..bbbb..","s.bbbb.s","..bbbb.."], b:["..bbbb..",".bbbbbb.","..bbbb.."] };
 const LEGS  = { stand:["..pppp..","..p..p..","..f..f.."], a:["..pppp..","..p..p..",".f....f."], b:["..pppp..",".pp.pp..","..f..f.."], run:["..pppp..",".p....p.","f......f"] };
-const SHIRTS = ['#ff8f8f','#8fd0ff','#b3e88f','#ffd98f','#d0a3ff','#8ffff2'];
-const HAIRS  = ['#5d4635','#8a5a35','#3b2a1a','#c96f3b','#4a6fa5','#7a4a8a'];
+const SHIRTS = ['#ff8f8f','#8fd0ff','#b3e88f','#ffd98f','#d0a3ff','#8ffff2','#cfd8dc'];
+const HAIRS  = ['#5d4635','#8a5a35','#3b2a1a','#c96f3b','#4a6fa5','#7a4a8a','#8a8a8a'];
 function drawFrame(head, torso, legs, x, y, i, flip, blink){
   const rows = HEADS[head].concat(TORSO[torso], LEGS[legs]);
   const pal = {h:HAIRS[i], s:'#ffdcc3', e:'#3b2a1a', b:SHIRTS[i], p:'#4a5568', f:'#3b2a1a'};
@@ -557,12 +557,91 @@ addEventListener('mousemove', e => {
   } else tip.style.display='none';
 });
 
-/* Task 5: updateEnv/drawHud จริง (ควันโรงงาน=Disk, ผู้เยี่ยมชมถนน=Network, HUD meters) */
+/* ================== HUD meters ================== */
+function fmtRate(bps){
+  if(bps >= 1e6) return (bps/1e6).toFixed(1) + ' MB/s';
+  if(bps >= 1e3) return Math.round(bps/1e3) + ' KB/s';
+  return Math.round(bps || 0) + ' B/s';
+}
+const HUD_IDS = [['cpu','CPU'],['ram','RAM'],['disk','DISK'],['net','NET'],['bat','BATTERY']];
+document.getElementById('hud').innerHTML = HUD_IDS.map(([id,lbl]) =>
+  `<div class="m"><b id="lbl-${id}">${lbl}</b><div class="bar"><i id="bar-${id}"></i></div></div>`).join('');
+function setMeter(id, pct, text){
+  const bar = document.getElementById('bar-'+id), lbl = document.getElementById('lbl-'+id);
+  bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  bar.className = pct > 80 ? 'hot' : pct > 60 ? 'warn' : '';
+  lbl.textContent = text;
+}
+function fmtUptime(sec){
+  const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60);
+  return h >= 24 ? Math.floor(h/24)+' วัน '+(h%24)+' ชม.' : h+' ชม. '+m+' น.';
+}
+function drawHud(){
+  const d = DATA;
+  if(d.cpu === undefined) return;
+  setMeter('cpu', d.cpu, `CPU ${Math.round(d.cpu)}%`);
+  setMeter('ram', d.ram, `RAM ${Math.round(d.ram)}%`);
+  setMeter('disk', Math.min(100, ((d.disk_r||0)+(d.disk_w||0)) / 2e7 * 100),
+           `DISK ↓${fmtRate(d.disk_r)} ↑${fmtRate(d.disk_w)}`);
+  setMeter('net', Math.min(100, ((d.net_rx||0)+(d.net_tx||0)) / 2e6 * 100),
+           `NET ↓${fmtRate(d.net_rx)} ↑${fmtRate(d.net_tx)}`);
+  if(d.battery) setMeter('bat', d.battery.pct, `BATT ${d.battery.pct}%${d.battery.plugged ? ' ⚡' : ''}`);
+  else setMeter('bat', 100, 'AC ⚡ (ไม่มีแบต)');
+  document.getElementById('small').innerHTML =
+      `เปิดมา ${fmtUptime(d.uptime||0)} · processes ${d.proc_count||'-'}` +
+      (d.temp ? ` · ${d.temp}°C` : '');
+}
+
+/* ================== ควันโรงงาน (Disk) + ผู้มาเยือน (Network) ================== */
+let smokeP = [];
+let visitors = [], visT = 4;
+const EDGE_NODES = ['m0','m7'];
 function updateEnv(dt){
   for(const d of dust){ d.a -= dt*2; d.r += dt*6; }
   dust = dust.filter(d => d.a > 0);
+  const d = DATA;
+  const diskAct = (d.disk_r||0) + (d.disk_w||0);
+  if(diskAct > 2e5 && smokeP.length < 40 && Math.random() < Math.min(0.4, diskAct/1.5e7)){
+    smokeP.push({x:926+Math.random()*6-3, y:70, vy:-(10+Math.random()*12), r:3, a:0.85});
+  }
+  for(const s of smokeP){ s.y += s.vy*dt; s.x += 7*dt; s.r += 6*dt; s.a -= 0.4*dt; }
+  smokeP = smokeP.filter(s => s.a > 0);
+  const netAct = (d.net_rx||0) + (d.net_tx||0);
+  visT -= dt * Math.min(2, 0.3 + netAct/1e6);
+  if(visT <= 0 && netAct > 2e5 && visitors.length < 6){
+    visT = 3;
+    const entry = EDGE_NODES[Math.floor(Math.random()*2)];
+    const [x,y] = NODES[entry];
+    visitors.push({x, y, node:entry, dest:'', hops:0, face:'s', flip:entry==='m7', ft:Math.random()*9});
+  }
+  for(const v of visitors){
+    if(!v.dest){
+      const opts = ADJ[v.node];
+      v.dest = opts[Math.floor(Math.random()*opts.length)];
+    }
+    const [tx,ty] = NODES[v.dest];
+    const dx = tx-v.x, dy = ty-v.y, dist = Math.abs(dx)+Math.abs(dy);
+    if(dist < 1){ v.x=tx; v.y=ty; v.node=v.dest; v.dest=''; v.hops++;
+      if(EDGE_NODES.includes(v.node) && v.hops >= 2) v.done = true;
+    } else {
+      if(Math.abs(dx)>=Math.abs(dy)){ v.face='s'; v.flip = dx<0; } else v.face = dy>0?'f':'b';
+      v.x += dx/dist*55*dt; v.y += dy/dist*55*dt; v.ft += dt*2.5;
+    }
+  }
+  visitors = visitors.filter(v => !v.done);
 }
-function drawHud(){}
+function drawEnvFx(){
+  for(const s of smokeP){
+    ctx.fillStyle = `rgba(120,116,128,${(s.a*0.6).toFixed(2)})`;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill();
+  }
+  for(const v of visitors){
+    ctx.fillStyle='#3f3f3f55';
+    ctx.beginPath(); ctx.ellipse(v.x, v.y+30, 13, 4, 0, 0, 7); ctx.fill();
+    drawFrame(v.face, 'stand', v.dest ? (Math.floor(v.ft)%2?'a':'b') : 'stand',
+              v.x - 4*U, v.y - 10*U, 6, v.flip, false);
+  }
+}
 
 /* ================== main loop ================== */
 let last = 0;
@@ -575,11 +654,13 @@ function frame(ms){
   ctx.drawImage(bg, 0, 0);
   drawShades(dt); drawRipples(t); drawTufts(t); drawFlags(t);
   drawFountain(t);
+  applyData();
   updateEnv(dt); updateBirds(dt);
   const order = chars.filter(c=>c.active).sort((a,b)=>a.y-b.y);
   for(const c of order){ c.update(dt); }
   for(const d of dust){ ctx.fillStyle=`rgba(180,150,100,${d.a.toFixed(2)})`; ctx.beginPath(); ctx.arc(d.x,d.y,d.r,0,7); ctx.fill(); }
   for(const c of order){ c.draw(t); }
+  drawEnvFx();
   drawButterflies(t); drawBirds(t);
   drawHud();
   requestAnimationFrame(frame);
