@@ -95,7 +95,7 @@ class Sampler(threading.Thread):
             b = psutil.sensors_battery()
             snap["battery"] = None if b is None else {"pct": round(b.percent), "plugged": bool(b.power_plugged)}
             snap["procs"] = self.top_procs()
-            snap["proc_count"] = psutil.process_count()
+            snap["proc_count"] = len(psutil.pids())
             snap["uptime"] = now - psutil.boot_time()
             snap["temp"] = None
             temps = getattr(psutil, "sensors_temperatures", None)
@@ -118,3 +118,140 @@ class Sampler(threading.Thread):
 SAMPLER = None
 STATE = {"last_ping": 0.0, "first_ping": False}
 INDEX_HTML = "PC Town loading"  # Task 3 แทนที่ด้วยหน้าเว็บจริง
+HTTP_PORT = HTTP_PORT_START
+
+
+def pick_http_port():
+    for port in range(HTTP_PORT_START, HTTP_PORT_START + 11):
+        if port == LOCK_PORT:
+            continue                                   # 8766 กันไว้สำหรับ lock เท่านั้น
+        s = socket.socket()
+        try:
+            s.bind(("127.0.0.1", port))
+            return port
+        except OSError:
+            pass
+        finally:
+            s.close()
+    raise OSError("หา port ว่างไม่ได้ (8765-8775)")
+
+
+class LockAnswer(threading.Thread):
+    daemon = True
+
+    def __init__(self, sock):
+        super().__init__(name="lock")
+        self.sock = sock
+
+    def run(self):
+        while True:
+            try:
+                c, _ = self.sock.accept()
+                c.sendall(f"{HTTP_PORT}\n".encode())
+                c.close()
+            except OSError:
+                return
+
+
+def acquire_lock():
+    """คืน URL ของ instance เดิมถ้ามี (ไม่ต้องรันซ้ำ) หรือ None ถ้าเราได้เป็น instance แรก"""
+    try:
+        s = socket.create_connection(("127.0.0.1", LOCK_PORT), timeout=0.5)
+    except OSError:
+        s = None
+    if s:
+        try:
+            port = int(s.recv(16).decode().strip())
+        except Exception:
+            port = HTTP_PORT_START
+        s.close()
+        return f"http://127.0.0.1:{port}/"
+    ls = socket.socket()
+    ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    ls.bind(("127.0.0.1", LOCK_PORT))
+    ls.listen(4)
+    LockAnswer(ls).start()
+    return None
+
+
+class Handler(__import__("http.server", fromlist=["BaseHTTPRequestHandler"]).BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body, ctype="application/json"):
+        data = body.encode("utf-8") if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", ctype + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path == "/":
+            self._send(200, INDEX_HTML, "text/html")
+        elif self.path == "/api/status":
+            self._send(200, json.dumps(SAMPLER.snapshot() if SAMPLER else {}))
+        elif self.path == "/api/ping":
+            STATE["last_ping"] = time.time()
+            STATE["first_ping"] = True
+            self._send(200, '{"ok":true}')
+        else:
+            self._send(404, '{"error":"not found"}')
+
+    def do_POST(self):
+        if self.path == "/api/shutdown":
+            self._send(200, '{"ok":true}')
+            threading.Timer(0.3, lambda: os._exit(0)).start()
+        else:
+            self._send(404, "{}")
+
+
+def watchdog():
+    while True:
+        time.sleep(1)
+        if STATE["first_ping"] and time.time() - STATE["last_ping"] > 5:
+            os._exit(0)
+
+
+def open_url(url):
+    try:
+        os.startfile(url)  # เปิด default browser บน Windows
+    except Exception:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            d = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "PC_Town")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "last_url.txt"), "w", encoding="utf-8") as f:
+                f.write(url)
+
+
+def main():
+    global SAMPLER, HTTP_PORT
+    if psutil is None:
+        try:
+            import tkinter
+            from tkinter import messagebox
+            tkinter.Tk().withdraw()
+            messagebox.showerror("PC Town", "ไม่พบ psutil\nรัน: python -m pip install psutil")
+        except Exception:
+            pass
+        sys.exit(1)
+    existing = acquire_lock()
+    if existing:
+        open_url(existing)
+        return
+    HTTP_PORT = pick_http_port()
+    SAMPLER = Sampler()
+    SAMPLER.start()
+    from http.server import ThreadingHTTPServer
+    srv = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
+    threading.Thread(target=watchdog, daemon=True, name="watchdog").start()
+    url = f"http://127.0.0.1:{HTTP_PORT}/"
+    if os.environ.get("PC_TOWN_NO_BROWSER") != "1":
+        threading.Timer(0.5, open_url, [url]).start()
+    srv.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
