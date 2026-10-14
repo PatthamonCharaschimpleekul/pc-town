@@ -27,13 +27,15 @@ async function main() {
 
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.method === 'Page.screencastframe') {
+    if (msg.method === 'Page.screencastFrame') {
       const f = path.join(OUT, `f${String(n++).padStart(3, '0')}.jpeg`);
       fs.writeFileSync(f, Buffer.from(msg.params.data, 'base64'));
+      send('Page.screencastFrameAck', { sessionId: msg.params.sessionId });
     }
   };
   await new Promise(r => ws.onopen = r);
   send('Page.enable');
+  send('Page.bringToFront');
   send('Page.startScreencast', { format: 'jpeg', quality: 85, maxWidth: 1280, everyNthFrame: 2 });
   await new Promise(r => setTimeout(r, DURATION_MS));
   send('Page.stopScreencast');

@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 _harness.js
 _shot*.png
+
+_edgeprofile/
+docs/readme/frames/
