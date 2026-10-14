@@ -1,5 +1,5 @@
 from collections import deque
-from pc_town import select_procs, verify_kill, TOP_N
+from pc_town import select_procs, verify_kill, proc_role, TOP_N
 
 
 def P(name, pid, cpu):  # helper สร้าง item
@@ -35,3 +35,14 @@ def test_verify_kill():
     assert verify_kill(procs, "x.exe", 42) == "ok"
     assert verify_kill(procs, "x.exe", 99) == "gone"      # pid ไม่อยู่ (ตายไปแล้ว)
     assert verify_kill(procs, "y.exe", 42) == "mismatch"  # pid อยู่แต่ชื่อคนละตัว
+
+
+def test_proc_role_type():
+    assert proc_role(["C:\\app\\msedge.exe", "--type=renderer"]) == "renderer"
+    assert proc_role(["C:\\app\\Code.exe", "--type=extensionHost"]) == "extensionhost"
+    assert proc_role(["python.exe", "-c", "x"]) is None
+
+
+def test_proc_role_script():
+    assert proc_role(["python.exe", "burn.py"]) == "burn.py"
+    assert proc_role(["python.exe"]) is None
