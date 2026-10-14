@@ -1,5 +1,5 @@
 """PC Town — ดูการทำงานของเครื่องเป็นเมือง pixel art (เปิดผ่าน shortcut, ปิดเองเมื่อปิดแท็บ)"""
-import json, os, socket, sys, threading, time, webbrowser
+import ctypes, json, os, socket, sys, threading, time, webbrowser
 from collections import deque
 
 try:
@@ -29,6 +29,49 @@ def should_include(name, pid, ppid, own_pids=OWN_PIDS):
     if ppid == 4:
         return False
     return True
+
+
+def proc_role(cmdline):
+    """สกัดสายงานจาก command line: --type=renderer / สคริปต์ .py ที่รันอยู่"""
+    args = cmdline or []
+    for a in args[1:]:
+        if a.lower().startswith('--type='):
+            return a.split('=', 1)[1].lower()
+    for a in args[1:]:
+        if a.lower().endswith('.py') and not a.startswith('-'):
+            return os.path.basename(a)
+    return None
+
+
+def window_title(pid):
+    """หาชื่อหน้าต่างหลักของ process (ctypes user32 — ไม่มี dependency เพิ่ม)"""
+    try:
+        user32 = ctypes.windll.user32
+        found = []
+        proto = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def cb(hwnd, _):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            wpid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+            if wpid.value != pid:
+                return True
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            t = buf.value.strip()
+            if t:
+                found.append(t)
+                return False          # พอเจอหน้าต่างแรกก็หยุด enum
+            return True
+
+        user32.EnumWindows(proto(cb), 0)
+        return found[0] if found else None
+    except Exception:
+        return None
 
 
 def select_procs(items, pinned, hidden, top_n=TOP_N):
@@ -80,24 +123,34 @@ class Sampler(threading.Thread):
         self.last_all = []       # items ของ tick ล่าสุด (ใช้ตรวจ pin "ยังมีชีวิต")
 
     def top_procs(self):
-        items = []
-        for p in psutil.process_iter(["pid", "name", "ppid", "cpu_percent", "memory_info"]):
+        items, id2name = [], {}
+        for p in psutil.process_iter(["pid", "name", "ppid", "cpu_percent", "memory_info",
+                                      "cmdline", "create_time"]):
             try:
                 i = p.info
+                id2name[i["pid"]] = i["name"]
                 if not should_include(i["name"], i["pid"], i["ppid"]):
                     continue
                 items.append({"name": i["name"], "pid": i["pid"],
                               "cpu": round(i["cpu_percent"], 1),
-                              "memMB": round(i["memory_info"].rss / 2**20, 1) if i.get("memory_info") else 0.0})
+                              "memMB": round(i["memory_info"].rss / 2**20, 1) if i.get("memory_info") else 0.0,
+                              "_cl": i["cmdline"] or [], "_pp": i["ppid"], "_ct": i["create_time"]})
             except Exception:
                 continue
         self.last_all = items
         chosen = select_procs(items, self.pinned, self.hidden)
+        now = time.time()
         alive = {d["name"].lower() for d in chosen}
         for d in chosen:
             dq = self.history.setdefault(d["name"].lower(), deque(maxlen=30))
             dq.append(d["cpu"])
             d["hist"] = list(dq)
+            d["role"] = proc_role(d["_cl"])
+            d["parent"] = id2name.get(d["_pp"], "")
+            d["up"] = round(now - d["_ct"])
+            d["cmd"] = " ".join(d["_cl"])[:160]
+            d.pop("_cl"); d.pop("_pp"); d.pop("_ct")
+            d["title"] = window_title(d["pid"])
         if len(self.history) > 60:   # memory guard
             self.history = {k: v for k, v in self.history.items() if k in alive}
         return chosen
@@ -175,6 +228,9 @@ html,body{margin:0;height:100%;overflow:hidden;background:#86c76c;font-family:'S
 #menu button,#hiddenBtn button{border:2px solid #4a3220;border-radius:5px;background:#ffe9a8;padding:3px 7px;cursor:pointer;font-size:12px}
 #menu button.on{background:#7ee081} #menu button.danger{background:#ff8f8f}
 #menu canvas{display:block;margin-top:6px;background:#f6efe0;border:2px solid #4a322066;border-radius:4px}
+#menu .detail{margin-top:6px;font-size:11px;line-height:1.5;border-top:2px dashed #4a322033;padding-top:5px}
+#menu .detail .cmd{display:block;font-family:monospace;font-size:9.5px;color:#6b5540;word-break:break-all;
+                  background:#f6efe0;border-radius:3px;padding:2px 4px;margin-top:3px;max-height:34px;overflow:hidden}
 #hiddenBtn{position:fixed;left:10px;bottom:78px;z-index:9;background:#c7ceea;border:3px solid #4a3220;
            border-radius:6px;padding:4px 10px;cursor:pointer;font-weight:bold}
 #toast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);background:#4a3220ee;color:#fff;
@@ -562,6 +618,8 @@ class Char {
     if(!this.name && name){ this.name = name; this.nameAlpha = 1; }
     this.cpu = p ? p.cpu : 0;
     this.memMB = p ? p.memMB : 0;
+    this.title = p ? (p.title || '') : '';
+    this.role = p ? (p.role || '') : '';
     this.size = this.memMB > 800 ? 1.2 : this.memMB > 300 ? 1.1 : 1;
     const c = this.cpu;
     this.idle = !p || c < 1;
@@ -626,7 +684,9 @@ class Char {
     }
     if(this.name){
       ctx.globalAlpha = Math.max(0, Math.min(1, this.nameAlpha));
-      const label = this.name.replace(/\.exe$/i,'').slice(0,14);
+      const base = this.name.replace(/\.exe$/i,'').slice(0,14);
+      const tag  = (this.title || this.role || '').slice(0,16);
+      const label = tag ? base+'·'+tag : base;
       ctx.font='bold 10px monospace';
       const tw = ctx.measureText(label).width;
       rr(this.x-tw/2-3, this.y+34, tw+6, 13, 3, '#fffbe7dd', null);
@@ -826,10 +886,18 @@ function renderMenu(){
   if(!p){ closeMenu(); return; }                    // proc ตาย/หลุด slot → ปิดอัตโนมัติ
   const cat = categoryOf(p.name);
   const isPinned = (DATA.pinned || []).includes(p.name.toLowerCase());
+  const fmtUp = s => { s = s||0; const h = Math.floor(s/3600), m = Math.floor(s%3600/60);
+    return h ? h+' ชม. '+m+' น.' : m > 0 ? m+' นาที' : s+' วินาที'; };
+  const esc = s => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   menuEl.innerHTML = `
-    <h3>${CAT_ICON[cat]} ${p.name}</h3>
+    <h3>${CAT_ICON[cat]} ${esc(p.name)}${p.role ? ' <small>('+esc(p.role)+')</small>' : ''}</h3>
     <div>CPU <b>${p.cpu}%</b> · RAM <b>${p.memMB} MB</b> · pid ${p.pid}</div>
     <canvas id="spark" width="210" height="44"></canvas>
+    <div class="detail">
+      🪟 หน้าต่าง: ${p.title ? esc(p.title.slice(0,40)) : '<i>ไม่มี (โปรเซสพื้นหลัง)</i>'}<br>
+      👶 parent: ${esc(p.parent) || '-'} · ⏱ รันมา ${fmtUp(p.up)}<br>
+      <span class="cmd">${esc(p.cmd)}</span>
+    </div>
     <div class="row">
       <button id="mPin" class="${isPinned?'on':''}">📌 ${isPinned?'ถอดหมุด':'ปักหมุด'}</button>
       <button id="mHide">👁 ซ่อนบ้าน</button>
