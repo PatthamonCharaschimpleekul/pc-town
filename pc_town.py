@@ -169,12 +169,25 @@ html,body{margin:0;height:100%;overflow:hidden;background:#86c76c;font-family:'S
 .bar i.warn{background:#ffd35c}.bar i.hot{background:#ff7a5c}
 #small{position:fixed;right:12px;bottom:78px;color:#fff;font-size:11px;text-align:right;z-index:8;text-shadow:1px 1px 0 #0006}
 #dead{position:fixed;inset:0;display:none;place-items:center;font-size:22px;color:#4a3220;background:#c9e8b8}
+#menu{position:fixed;z-index:10;width:230px;background:#fffbe7;border:3px solid #4a3220;border-radius:8px;
+      padding:10px;font-size:13px;color:#4a3220;box-shadow:4px 4px 0 #4a322044}
+#menu h3{margin:0 0 4px;font-size:14px} #menu .row{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+#menu button,#hiddenBtn button{border:2px solid #4a3220;border-radius:5px;background:#ffe9a8;padding:3px 7px;cursor:pointer;font-size:12px}
+#menu button.on{background:#7ee081} #menu button.danger{background:#ff8f8f}
+#menu canvas{display:block;margin-top:6px;background:#f6efe0;border:2px solid #4a322066;border-radius:4px}
+#hiddenBtn{position:fixed;left:10px;bottom:78px;z-index:9;background:#c7ceea;border:3px solid #4a3220;
+           border-radius:6px;padding:4px 10px;cursor:pointer;font-weight:bold}
+#toast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);background:#4a3220ee;color:#fff;
+       padding:6px 14px;border-radius:6px;font-size:13px;z-index:12}
 </style></head><body>
 <canvas id="cv"></canvas>
 <div id="tip"></div>
 <div id="hud"></div>
 <div id="small"></div>
 <button id="offBtn">ปิดแอป</button>
+<div id="menu" hidden></div>
+<button id="hiddenBtn" hidden></button>
+<div id="toast" hidden></div>
 <div id="dead">ปิดเรียบร้อย — ปิดแท็บนี้ได้เลยค่ะ 🏙️</div>
 <script>
 "use strict";
@@ -465,6 +478,67 @@ function drawFlags(t){
   });
 }
 
+/* ================== บ้านเฉพาะตัวตามชนิดแอป ================== */
+const CAT_RULES = [
+  ['browser', /chrome|msedge|firefox|opera|brave|vivaldi/i],
+  ['media',   /spotify|vlc|itunes|foobar|aimp|wmplayer|audacity|deezer/i],
+  ['game',    /steam|epic|riot|wegame|armoury|minecraft|game|xbox|playgame/i],
+  ['dev',     /code|pycharm|idea|node|python|git|docker|java|electron|cursor/i],
+  ['chat',    /discord|telegram|weixin|wechat|messenger|teams|slack|zoom|whatsapp|line\.exe|lineweb/i],
+];
+const CAT_ICON = {browser:'\u{1F310}', media:'\u{1F3B5}', game:'\u{1F3AE}', dev:'\u{1F6E0}', chat:'\u{1F4AC}', other:'⚙'};
+function categoryOf(name){
+  for(const [c, re] of CAT_RULES) if(re.test(name)) return c;
+  return 'other';
+}
+function houseDecor(t){
+  const procs = DATA.procs || [];
+  for(let i=0; i<6; i++){
+    const cx = HOUSE_X[i];
+    if(i >= procs.length){                      // slot ว่าง: บ้านมืด ประตูเปิด
+      ctx.fillStyle = 'rgba(28,30,46,0.42)'; ctx.fillRect(cx-54, 44, 108, 116);
+      ctx.fillStyle = '#241c12'; ctx.fillRect(cx-10, 126, 20, 30);
+      continue;
+    }
+    const cat = categoryOf(procs[i].name);
+    ctx.textAlign = 'center';
+    if(cat === 'browser'){                      // จานดาวเทียม
+      ctx.fillStyle = '#cfd8dc'; ctx.beginPath(); ctx.arc(cx+70, 56, 9, Math.PI, 0); ctx.fill();
+      px(cx+69, 56, 2, 14, '#8a8a9a'); px(cx+64, 50, 10, 2, '#8a8a9a');
+      px(cx+52, 104, 12, 12, '#3f6fae');
+    }
+    if(cat === 'media'){                         // ลำโพง + โน้ตลอย
+      px(cx-58, 138, 10, 18, '#5d4635'); px(cx-56, 141, 6, 5, '#cfd8dc'); px(cx-56, 148, 6, 4, '#cfd8dc');
+      px(cx+48, 138, 10, 18, '#5d4635'); px(cx+50, 141, 6, 5, '#cfd8dc'); px(cx+50, 148, 6, 4, '#cfd8dc');
+      ctx.fillStyle = '#4a3220'; ctx.font = '13px monospace';
+      ctx.fillText('♪', cx-26, 116 - ((t*14 + i*7) % 26));
+      ctx.fillText('♫', cx+26, 112 - ((t*11 + i*13) % 30));
+    }
+    if(cat === 'game'){                          // ยอดหลังคาสามเหลี่ยมเข้ม + ป้ายจอย
+      ctx.fillStyle = 'rgba(90,60,130,0.75)';
+      ctx.beginPath(); ctx.moveTo(cx-52, 72); ctx.lineTo(cx, 38); ctx.lineTo(cx+52, 72); ctx.closePath(); ctx.fill();
+      ctx.font = '11px monospace'; ctx.fillText('\u{1F3AE}', cx, 28);
+    }
+    if(cat === 'dev'){                           // ปล่องเล็ก + ไฟหน้าต่างเขียวกะพริบ
+      px(cx-34, 46, 8, 24, '#6e6780'); px(cx-36, 44, 12, 4, '#565163');
+      for(let k=0;k<2;k++){
+        const on = (Math.floor(t*2) + k + i) % 3;
+        px(cx-38+k*56, 110, 16, 16, on ? '#7ee081' : '#3d5c40');
+      }
+    }
+    if(cat === 'chat'){                          // เสาอากาศ + ซองจดหมายลอย
+      px(cx+40, 38, 2, 20, '#8a8a9a'); px(cx+36, 36, 10, 2, '#8a8a9a');
+      const ay = 110 - ((t*10 + i*5) % 20);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(cx+30, ay, 11, 8);
+      ctx.strokeStyle = '#4a3220'; ctx.lineWidth = 1;
+      ctx.strokeRect(cx+30.5, ay+.5, 10, 7);
+      ctx.beginPath(); ctx.moveTo(cx+31, ay+1); ctx.lineTo(cx+35.5, ay+5); ctx.lineTo(cx+40, ay+1); ctx.stroke();
+    }
+    ctx.font = '12px monospace';
+    ctx.fillText(CAT_ICON[cat], cx-56, 60);     // ไอคอนหมวดมุมซ้ายบ้าน
+  }
+}
+
 /* ================== ตัวละคร ================== */
 let dust = [];
 class Char {
@@ -570,6 +644,7 @@ async function poll(){
   try{
     const r = await fetch('/api/status'); DATA = await r.json();
     fetch('/api/ping').catch(()=>{});
+    refreshMenu();
   }catch(e){}
   setTimeout(poll, 1000);
 }
@@ -687,6 +762,7 @@ function frame(ms){
   ctx.setTransform(scale,0,0,scale,offX,offY);
   ctx.drawImage(bg, 0, 0);
   drawShades(dt); drawRipples(t); drawTufts(t); drawFlags(t);
+  houseDecor(t);
   drawFountain(t);
   applyData();
   updateEnv(dt); updateBirds(dt);
@@ -700,6 +776,119 @@ function frame(ms){
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+/* ================== เมนูบ้าน (detail / pin / hide / kill) ================== */
+const menuEl = document.getElementById('menu');
+const hiddenBtn = document.getElementById('hiddenBtn');
+const toastEl = document.getElementById('toast');
+let menuSlot = -1, killArm = 0, killTimer = null, toastTimer = null;
+
+function toast(msg){
+  toastEl.textContent = msg; toastEl.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.hidden = true, 2600);
+}
+async function apiPost(path, body){
+  try{
+    const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
+                                 body: JSON.stringify(body)});
+    return await r.json();
+  }catch(e){ return {error:'server ปิดไปแล้ว'}; }
+}
+function slotAt(wx, wy){                    // คลิกบ้านหรือตัวละคร → slot ไหน
+  for(let i=0;i<6;i++){
+    const cx = HOUSE_X[i];
+    if(Math.abs(wx-cx) < 58 && wy > 36 && wy < 186) return i;
+    const c = chars[i];
+    if(c && c.active && Math.abs(wx-c.x) < 18 && wy > c.y-34 && wy < c.y+10) return i;
+  }
+  return -1;
+}
+addEventListener('click', e => {
+  if(menuEl.contains(e.target) || e.target === hiddenBtn || hiddenBtn.contains(e.target)) return;
+  const wx = (e.clientX*dpr - offX)/scale, wy = (e.clientY*dpr - offY)/scale;
+  const i = slotAt(wx, wy);
+  if(i >= 0) openMenu(i, e); else closeMenu();
+});
+addEventListener('keydown', e => { if(e.key === 'Escape') closeMenu(); });
+
+function openMenu(i, e){
+  menuSlot = i; killArm = 0; clearTimeout(killTimer);
+  menuEl.hidden = false;
+  const pxX = Math.min(innerWidth-250, Math.max(6, e ? e.clientX+16 : 60));
+  const pxY = Math.min(innerHeight-280, Math.max(6, (e ? e.clientY-20 : 80)));
+  menuEl.style.left = pxX+'px'; menuEl.style.top = pxY+'px';
+  renderMenu();
+}
+function closeMenu(){ menuEl.hidden = true; menuSlot = -1; }
+
+function renderMenu(){
+  const p = (DATA.procs || [])[menuSlot];
+  if(!p){ closeMenu(); return; }                    // proc ตาย/หลุด slot → ปิดอัตโนมัติ
+  const cat = categoryOf(p.name);
+  const isPinned = (DATA.pinned || []).includes(p.name.toLowerCase());
+  menuEl.innerHTML = `
+    <h3>${CAT_ICON[cat]} ${p.name}</h3>
+    <div>CPU <b>${p.cpu}%</b> · RAM <b>${p.memMB} MB</b> · pid ${p.pid}</div>
+    <canvas id="spark" width="210" height="44"></canvas>
+    <div class="row">
+      <button id="mPin" class="${isPinned?'on':''}">📌 ${isPinned?'ถอดหมุด':'ปักหมุด'}</button>
+      <button id="mHide">👁 ซ่อนบ้าน</button>
+      <button id="mKill" class="danger">☠ ปิดแอป</button>
+      <button id="mClose">✖</button>
+    </div>`;
+  const sc = menuEl.querySelector('#spark'), sctx = sc.getContext('2d');
+  const hist = p.hist || [];
+  const max = Math.max(5, ...hist);
+  hist.forEach((v, k) => {
+    const h = Math.round(v / max * 38);
+    sctx.fillStyle = v > 20 ? '#ff7a5c' : v > 5 ? '#ffd35c' : '#7ee081';
+    sctx.fillRect(2 + k*7, 42 - h, 5, h);
+  });
+  sctx.fillStyle = '#4a322099'; sctx.font = '9px monospace';
+  sctx.fillText('CPU 30 วิล่าสุด →', 128, 10);
+  menuEl.querySelector('#mPin').onclick = async () => {
+    const r = await apiPost('/api/pin', {name: p.name, on: !isPinned});
+    if(r.error) toast({max6:'ปักหมุดได้สูงสุด 6 บ้าน', gone:'โปรเซสนี้ปิดไปแล้ว'}[r.error] || r.error);
+    else renderMenu();
+  };
+  menuEl.querySelector('#mHide').onclick = async () => {
+    await apiPost('/api/hide', {name: p.name, on: true});
+    closeMenu();
+  };
+  const killBtn = menuEl.querySelector('#mKill');
+  killBtn.onclick = async () => {
+    if(killArm < 2){                                  // ยืนยันสองชั้น
+      killArm = 2; killBtn.textContent = '⚠ แน่ใจ? กดอีกที';
+      clearTimeout(killTimer); killTimer = setTimeout(() => { killArm = 0; if(!menuEl.hidden) renderMenu(); }, 3000);
+      return;
+    }
+    const r = await apiPost('/api/kill', {name: p.name, pid: p.pid});
+    if(r.error) toast({gone:'แอปปิดไปแล้ว', mismatch:'ชื่อไม่ตรงโปรเซส (ข้อมูลใหม่กว่านี้)', 'access denied':'ปิดไม่ได้ — สิทธิ์ไม่พอ'}[r.error] || r.error);
+    closeMenu();
+  };
+  menuEl.querySelector('#mClose').onclick = closeMenu;
+}
+
+hiddenBtn.onclick = () => {
+  const hs = DATA.hidden || [];
+  menuSlot = -2;                                      // โหมด hidden-list (renderMenu ไม่ทับ)
+  menuEl.innerHTML = `<b>ซ่อนไว้ (${hs.length})</b><br>` +
+    (hs.length ? hs.map(n => `<button class="uh" data-n="${n}">👁 ${n}</button>`).join(' ') : '<i>ไม่มี</i>');
+  menuEl.hidden = false;
+  menuEl.style.left = '10px'; menuEl.style.top = (innerHeight - 230) + 'px';
+  menuEl.querySelectorAll('.uh').forEach(b => b.onclick = async () => {
+    await apiPost('/api/hide', {name: b.dataset.n, on: false});
+  });
+};
+function updateHiddenBtn(){
+  const hs = DATA.hidden || [];
+  hiddenBtn.hidden = !hs.length;
+  hiddenBtn.textContent = `👁 ซ่อนไว้ (${hs.length})`;
+}
+function refreshMenu(){
+  updateHiddenBtn();
+  if(!menuEl.hidden && menuSlot >= 0) renderMenu();
+}
 
 document.getElementById('offBtn').onclick = async () => {
   try{ await fetch('/api/shutdown',{method:'POST'}); }catch(e){}
