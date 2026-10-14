@@ -1,5 +1,6 @@
 """PC Town — ดูการทำงานของเครื่องเป็นเมือง pixel art (เปิดผ่าน shortcut, ปิดเองเมื่อปิดแท็บ)"""
 import json, os, socket, sys, threading, time, webbrowser
+from collections import deque
 
 try:
     import psutil
@@ -30,6 +31,25 @@ def should_include(name, pid, ppid, own_pids=OWN_PIDS):
     return True
 
 
+def select_procs(items, pinned, hidden, top_n=TOP_N):
+    """items: list[dict{name,pid,cpu,memMB}] — pinned เข้า slot ก่อน (เรียง cpu),
+    ตัด hidden, เติมด้วย cpu เรียง desc, ไม่เกิน top_n"""
+    hs = {h.lower() for h in hidden}
+    ps = {p.lower() for p in pinned}
+    items = [i for i in items if i["name"].lower() not in hs]
+    first = sorted([i for i in items if i["name"].lower() in ps], key=lambda d: -d["cpu"])
+    rest = sorted([i for i in items if i["name"].lower() not in ps], key=lambda d: -d["cpu"])
+    return (first + rest)[:top_n]
+
+
+def verify_kill(procs, name, pid):
+    """ตรวจสองชั้นก่อน kill: pid ต้องปรากฏใน procs ล่าสุด และ name ตรงกัน"""
+    for p in procs:
+        if p["pid"] == pid:
+            return "ok" if p["name"].lower() == str(name).lower() else "mismatch"
+    return "gone"
+
+
 class Delta:
     """คำนวณ rate ต่อวินาทีจาก counter สะสม (reset-safe)"""
     def __init__(self):
@@ -54,21 +74,33 @@ class Sampler(threading.Thread):
         self._snap = {}
         self._disk_r = Delta(); self._disk_w = Delta()
         self._net_rx = Delta(); self._net_tx = Delta()
+        self.pinned = set()
+        self.hidden = set()
+        self.history = {}        # name.lower() -> deque(maxlen=30) of cpu
+        self.last_all = []       # items ของ tick ล่าสุด (ใช้ตรวจ pin "ยังมีชีวิต")
 
     def top_procs(self):
-        out = []
+        items = []
         for p in psutil.process_iter(["pid", "name", "ppid", "cpu_percent", "memory_info"]):
             try:
                 i = p.info
                 if not should_include(i["name"], i["pid"], i["ppid"]):
                     continue
-                out.append(i)
+                items.append({"name": i["name"], "pid": i["pid"],
+                              "cpu": round(i["cpu_percent"], 1),
+                              "memMB": round(i["memory_info"].rss / 2**20, 1) if i.get("memory_info") else 0.0})
             except Exception:
                 continue
-        out.sort(key=lambda d: d["cpu_percent"], reverse=True)
-        return [{"name": d["name"], "cpu": round(d["cpu_percent"], 1),
-                 "memMB": round(d["memory_info"].rss / 2**20, 1) if d.get("memory_info") else 0.0}
-                for d in out[:TOP_N]]
+        self.last_all = items
+        chosen = select_procs(items, self.pinned, self.hidden)
+        alive = {d["name"].lower() for d in chosen}
+        for d in chosen:
+            dq = self.history.setdefault(d["name"].lower(), deque(maxlen=30))
+            dq.append(d["cpu"])
+            d["hist"] = list(dq)
+        if len(self.history) > 60:   # memory guard
+            self.history = {k: v for k, v in self.history.items() if k in alive}
+        return chosen
 
     def run(self):
         for p in psutil.process_iter():          # bootstrap per-process cpu_percent
@@ -95,6 +127,8 @@ class Sampler(threading.Thread):
             b = psutil.sensors_battery()
             snap["battery"] = None if b is None else {"pct": round(b.percent), "plugged": bool(b.power_plugged)}
             snap["procs"] = self.top_procs()
+            snap["pinned"] = sorted(self.pinned)
+            snap["hidden"] = sorted(self.hidden)
             snap["proc_count"] = len(psutil.pids())
             snap["uptime"] = now - psutil.boot_time()
             snap["temp"] = None
@@ -754,10 +788,41 @@ class Handler(__import__("http.server", fromlist=["BaseHTTPRequestHandler"]).Bas
         else:
             self._send(404, '{"error":"not found"}')
 
+    def _json_body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b"{}"
+        try:
+            return json.loads(raw or b"{}")
+        except Exception:
+            return {}
+
     def do_POST(self):
         if self.path == "/api/shutdown":
             self._send(200, '{"ok":true}')
             threading.Timer(0.3, lambda: os._exit(0)).start()
+        elif self.path in ("/api/pin", "/api/hide"):
+            b = self._json_body()
+            key = str(b.get("name", "")).lower()
+            on = bool(b.get("on", True))
+            target = SAMPLER.pinned if self.path == "/api/pin" else SAMPLER.hidden
+            if self.path == "/api/pin" and on:
+                if len(SAMPLER.pinned) >= TOP_N:
+                    self._send(200, '{"error":"max 6"}'); return
+                if not any(x["name"].lower() == key for x in SAMPLER.last_all):
+                    self._send(200, '{"error":"gone"}'); return
+            target.discard(key) if not on else target.add(key)
+            self._send(200, '{"ok":true}')
+        elif self.path == "/api/kill":
+            b = self._json_body()
+            procs = SAMPLER.snapshot().get("procs", []) if SAMPLER else []
+            res = verify_kill(procs, b.get("name", ""), b.get("pid"))
+            if res != "ok":
+                self._send(200, json.dumps({"error": res})); return
+            try:
+                psutil.Process(b["pid"]).terminate()
+                self._send(200, '{"ok":true}')
+            except Exception as e:
+                self._send(200, json.dumps({"error": "access denied" if isinstance(e, psutil.AccessDenied) else "gone"}))
         else:
             self._send(404, "{}")
 

@@ -60,3 +60,34 @@ def test_single_instance_lock():
         assert p2.returncode == 0            # instance สอง exit ทันที ไม่รัน server ซ้ำ
     finally:
         p1.terminate()
+
+
+def test_hide_and_unhide_via_api():
+    p = _spawn()
+    try:
+        _, snap = _wait_port()
+        name = snap["procs"][0]["name"]
+        req = lambda body: urllib.request.urlopen(urllib.request.Request(
+            "http://127.0.0.1:8765/api/hide", json.dumps(body).encode(),
+            {"Content-Type": "application/json"}), timeout=3).read().decode()
+        assert '"ok"' in req({"name": name, "on": True})
+        time.sleep(1.5)
+        snap2 = json.loads(_get("/api/status", 8765)[1])
+        assert snap2["hidden"] == [name.lower()]
+        assert all(pr["name"] != name for pr in snap2["procs"])
+        req({"name": name, "on": False})
+    finally:
+        p.terminate()
+
+
+def test_kill_endpoint_rejects_stale_pid():
+    p = _spawn()
+    try:
+        _wait_port()
+        body = json.dumps({"name": "explorer.exe", "pid": 999999}).encode()
+        r = urllib.request.urlopen(urllib.request.Request(
+            "http://127.0.0.1:8765/api/kill", body,
+            {"Content-Type": "application/json"}), timeout=3).read()
+        assert json.loads(r)["error"] == "gone"   # ไม่ได้ kill อะไรจริง
+    finally:
+        p.terminate()
